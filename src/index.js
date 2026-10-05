@@ -89,25 +89,28 @@ function welcomeEmbed(member) {
 function ticketPanel() {
   const embed = new EmbedBuilder()
     .setColor(0x20D620)
-    .setTitle('🎫 Ticket Center')
+    .setTitle('🎫 KT Team • Ticket Centar')
     .setDescription(
-      'You can create support requests with this system through our ticket agent.\n' +
-      'Please open your support requests correctly by the categorization.\n\n' +
-      '**📋 Categories**\n' +
-      '• **Tablet Ecosystem** - Tablet system and ecosystem-related issues\n' +
-      '• **Police** - Police-related matters and reports\n' +
-      '• **Mechanic & Garage** - Mechanic and garage system-related matters\n' +
-      '• **Evidence** - Evidence-related inquiries and submissions\n' +
-      '• **Job Systems** - Job-related matters and reports (Hunting, Fishing)\n' +
-      '• **Other Scripts** - Other scripts-related matters and reports\n' +
-      '• **Offers** - Special offers and promotional inquiries\n' +
-      '• **General** - General inquiries (NOT SUPPORT)\n\n' +
-      'Select a category from the dropdown below to get started.'
+      'Dobrodošli u KT Team sustav podrške.\n' +
+      'Odaberite kategoriju koja najbolje odgovara vašem zahtjevu.\n\n' +
+      '**📋 Kategorije**\n' +
+      '🎫 **Opća podrška** — Pomoć i opći problemi na serveru\n' +
+      '🐛 **Prijava buga** — Prijava bugova i tehničkih problema\n' +
+      '👮 **Prijava igrača** — Prijava igrača zbog kršenja pravila\n' +
+      '🛡️ **Prijava staffa** — Prijava člana administracije\n' +
+      '💼 **Poslovi / Frakcije** — Problemi vezani za poslove i frakcije\n' +
+      '🚗 **Vozila** — Vozila, garaže, impound i ključevi\n' +
+      '🏠 **Nekretnine** — Kuće, stanovi i nekretnine\n' +
+      '💳 **Donacije / Shop** — Pitanja vezana za kupovine i pakete\n' +
+      '🔨 **Ban Appeal** — Žalba na ban ili drugu kaznu\n' +
+      '🤝 **Partnerstvo** — Upiti vezani za partnerstva\n' +
+      '❓ **Ostalo** — Ostali upiti\n\n' +
+      '**Odaberite kategoriju iz izbornika ispod kako biste otvorili ticket.**'
     );
 
   const menu = new StringSelectMenuBuilder()
     .setCustomId('ticket_category')
-    .setPlaceholder('🎫 Select a category to create a ticket...')
+    .setPlaceholder('🎫 Odaberi kategoriju za otvaranje ticketa...')
     .addOptions(Object.entries(config.ticketCategories).map(([value, item]) => ({
       label: item.label,
       value,
@@ -349,14 +352,110 @@ async function closeTicketChannel(interaction) {
         { name: 'Korisnik', value: `<@${record.user_id}> (\`${record.user_id}\`)`, inline: false },
         { name: 'Kategorija', value: record.category_name, inline: true },
         { name: 'Zatvorio', value: `<@${interaction.user.id}>`, inline: true },
-        { name: 'Ticket kanal', value: `\`${interaction.channel.name}\``, inline: false }
+        { name: 'Ticket kanal', value: `${interaction.channel}`, inline: false }
       );
 
     await logChannel.send({ embeds: [logEmbed], files: [attachment] });
   }
 
-  await interaction.editReply('Ticket je spremljen u bazu i bit će zatvoren.');
-  setTimeout(() => interaction.channel.delete('KT Team ticket closed').catch(() => {}), 2500);
+  // Kanal ostaje sačuvan. Vlasnik ticketa ga vidi, ali ne može pisati dok ga ne otvori ponovno.
+  await interaction.channel.permissionOverwrites.edit(record.user_id, {
+    ViewChannel: true,
+    SendMessages: false,
+    ReadMessageHistory: true,
+    AttachFiles: false
+  });
+
+  const reopen = new ButtonBuilder()
+    .setCustomId(`reopen_ticket:${record.ticket_number}`)
+    .setLabel('Ponovno otvori ticket')
+    .setEmoji('🔓')
+    .setStyle(ButtonStyle.Success);
+
+  await interaction.channel.send({
+    embeds: [
+      baseEmbed()
+        .setTitle('🔒 Ticket je zatvoren')
+        .setDescription(
+          `<@${record.user_id}>, ovaj ticket je zatvoren i transcript je spremljen.\n\n` +
+          'Ako je problem ponovno aktualan, klikni **Ponovno otvori ticket**. ' +
+          'Otvorit će se **isti kanal/ticket**, a prethodne poruke će ostati sačuvane.'
+        )
+    ],
+    components: [new ActionRowBuilder().addComponents(reopen)]
+  });
+
+  await interaction.editReply('Ticket je zatvoren i spremljen. Može se ponovno otvoriti u istom kanalu. ✅');
+}
+
+async function reopenTicketChannel(interaction) {
+  const [prefix, numberRaw] = interaction.customId.split(':');
+  const ticketNumber = Number(numberRaw);
+  if (!ticketNumber) {
+    return interaction.reply({ content: 'Neispravan ticket.', ephemeral: true });
+  }
+
+  // Dohvati zatvoreni ticket za baš ovaj kanal.
+  const { db } = require('./db');
+  const [rows] = await db().query(
+    `SELECT * FROM discord_tickets
+     WHERE channel_id=? AND ticket_number=? AND status='closed'
+     LIMIT 1`,
+    [interaction.channel.id, ticketNumber]
+  );
+  const record = rows[0];
+
+  if (!record) {
+    return interaction.reply({ content: 'Ovaj ticket nije moguće ponovno otvoriti.', ephemeral: true });
+  }
+
+  const isOwner = interaction.user.id === record.user_id;
+  const canManage = interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels);
+  if (!isOwner && !canManage) {
+    return interaction.reply({ content: 'Samo vlasnik ticketa ili staff može ponovno otvoriti ovaj ticket.', ephemeral: true });
+  }
+
+  // Ako korisnik ima neki drugi otvoreni ticket, spriječi duplikat.
+  const existing = await getOpenTicketForUser(interaction.guild.id, record.user_id);
+  if (existing && existing.channel_id !== interaction.channel.id) {
+    return interaction.reply({
+      content: `Već postoji drugi otvoreni ticket: <#${existing.channel_id}>`,
+      ephemeral: true
+    });
+  }
+
+  await db().query(
+    `UPDATE discord_tickets
+     SET status='open', closed_at=NULL, closed_by=NULL
+     WHERE id=?`,
+    [record.id]
+  );
+
+  await interaction.channel.permissionOverwrites.edit(record.user_id, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true,
+    AttachFiles: true,
+    EmbedLinks: true
+  });
+
+  const close = new ButtonBuilder()
+    .setCustomId('close_ticket')
+    .setLabel('Zatvori ticket')
+    .setEmoji('🔒')
+    .setStyle(ButtonStyle.Danger);
+
+  await interaction.update({
+    embeds: [
+      baseEmbed()
+        .setTitle('🔓 Ticket je ponovno otvoren')
+        .setDescription(
+          `<@${record.user_id}>, ticket **#${String(record.ticket_number).padStart(4, '0')}** je ponovno otvoren.\n` +
+          'Sve prethodne poruke ostale su sačuvane.'
+        )
+    ],
+    components: [new ActionRowBuilder().addComponents(close)]
+  });
 }
 
 async function getFiveMStatus() {
@@ -536,6 +635,10 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.isButton() && interaction.customId === 'close_ticket') {
       return closeTicketChannel(interaction);
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('reopen_ticket:')) {
+      return reopenTicketChannel(interaction);
     }
 
     if (interaction.isButton() && interaction.customId === 'get_whitelist') {

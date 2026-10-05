@@ -115,6 +115,7 @@ async function getBotMessage(key) {
 }
 
 module.exports = {
+  db,
   initDatabase,
   nextTicketNumber,
   createTicket,

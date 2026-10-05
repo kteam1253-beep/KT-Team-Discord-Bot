@@ -29,45 +29,59 @@ module.exports = {
   },
 
   ticketCategories: {
-    tablet: {
-      label: 'Tablet Ecosystem',
-      emoji: '📱',
-      description: 'Tablet system and ecosystem-related issues'
+    general_support: {
+      label: 'Opća podrška',
+      emoji: '🎫',
+      description: 'Pomoć i opći problemi na serveru'
     },
-    police: {
-      label: 'Police',
+    bug_report: {
+      label: 'Prijava buga',
+      emoji: '🐛',
+      description: 'Prijava bugova i tehničkih problema'
+    },
+    player_report: {
+      label: 'Prijava igrača',
       emoji: '👮',
-      description: 'Police-related matters and reports'
+      description: 'Prijava igrača zbog kršenja pravila'
     },
-    mechanic: {
-      label: 'Mechanic & Garage',
-      emoji: '🔧',
-      description: 'Mechanic and garage system-related matters'
-    },
-    evidence: {
-      label: 'Evidence',
-      emoji: '🔍',
-      description: 'Evidence-related inquiries and submissions'
+    staff_report: {
+      label: 'Prijava staffa',
+      emoji: '🛡️',
+      description: 'Prijava člana administracije'
     },
     jobs: {
-      label: 'Job Systems',
-      emoji: '⛑️',
-      description: 'Job-related matters and reports (Hunting, Fishing)'
+      label: 'Poslovi / Frakcije',
+      emoji: '💼',
+      description: 'Problemi vezani za poslove i frakcije'
     },
-    scripts: {
-      label: 'Other Scripts',
-      emoji: '🧩',
-      description: 'Other scripts-related matters and reports'
+    vehicles: {
+      label: 'Vozila',
+      emoji: '🚗',
+      description: 'Vozila, garaže, impound i ključevi'
     },
-    offers: {
-      label: 'Offers',
-      emoji: '🏷️',
-      description: 'Special offers and promotional inquiries'
+    property: {
+      label: 'Nekretnine',
+      emoji: '🏠',
+      description: 'Kuće, stanovi i nekretnine'
     },
-    general: {
-      label: 'General',
-      emoji: '💬',
-      description: 'General inquiries (NOT SUPPORT)'
+    shop: {
+      label: 'Donacije / Shop',
+      emoji: '💳',
+      description: 'Pitanja vezana za kupovine i pakete'
+    },
+    ban_appeal: {
+      label: 'Ban Appeal',
+      emoji: '🔨',
+      description: 'Žalba na ban ili drugu kaznu'
+    },
+    partnership: {
+      label: 'Partnerstvo',
+      emoji: '🤝',
+      description: 'Upiti vezani za partnerstva'
+    },
+    other: {
+      label: 'Ostalo',
+      emoji: '❓',
+      description: 'Sve što ne pripada ostalim kategorijama'
     }
-  }
-};
+  }};

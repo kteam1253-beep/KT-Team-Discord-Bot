@@ -361,28 +361,37 @@ async function closeTicketChannel(interaction) {
 
 async function getFiveMStatus() {
   const base = `http://${config.fivem.host}:${config.fivem.port}`;
+  const options = {
+    timeout: 7000,
+    validateStatus: status => status >= 200 && status < 500
+  };
 
-  try {
-    const [dynamic, players, info] = await Promise.all([
-      axios.get(`${base}/dynamic.json`, { timeout: 7000 }),
-      axios.get(`${base}/players.json`, { timeout: 7000 }),
-      axios.get(`${base}/info.json`, { timeout: 7000 })
-    ]);
+  // Endpointi se provjeravaju neovisno. Jedan neuspješan endpoint
+  // više neće cijeli server označiti kao OFFLINE.
+  const [dynamicResult, playersResult, infoResult] = await Promise.allSettled([
+    axios.get(`${base}/dynamic.json`, options),
+    axios.get(`${base}/players.json`, options),
+    axios.get(`${base}/info.json`, options)
+  ]);
 
-    const playerList = Array.isArray(players.data) ? players.data : [];
-    const maxClients =
-      Number(dynamic.data?.sv_maxclients) ||
-      Number(info.data?.vars?.sv_maxClients) ||
-      Number(info.data?.vars?.sv_maxclients) ||
-      48;
+  const dynamic =
+    dynamicResult.status === 'fulfilled' && dynamicResult.value.status === 200
+      ? dynamicResult.value.data
+      : null;
 
-    return {
-      online: true,
-      name: dynamic.data?.hostname || info.data?.vars?.sv_projectName || config.brand.name,
-      players: playerList.length,
-      maxPlayers: maxClients
-    };
-  } catch {
+  const playersData =
+    playersResult.status === 'fulfilled' && playersResult.value.status === 200
+      ? playersResult.value.data
+      : null;
+
+  const info =
+    infoResult.status === 'fulfilled' && infoResult.value.status === 200
+      ? infoResult.value.data
+      : null;
+
+  const online = Boolean(dynamic || info || Array.isArray(playersData));
+
+  if (!online) {
     return {
       online: false,
       name: config.brand.name,
@@ -390,6 +399,33 @@ async function getFiveMStatus() {
       maxPlayers: 48
     };
   }
+
+  const playerList = Array.isArray(playersData) ? playersData : [];
+
+  const maxPlayers =
+    Number(dynamic?.sv_maxclients) ||
+    Number(dynamic?.clients) ||
+    Number(info?.vars?.sv_maxClients) ||
+    Number(info?.vars?.sv_maxclients) ||
+    48;
+
+  const playerCount =
+    Array.isArray(playersData)
+      ? playerList.length
+      : Number(dynamic?.clients) || 0;
+
+  const serverName =
+    dynamic?.hostname ||
+    info?.vars?.sv_projectName ||
+    info?.vars?.sv_hostname ||
+    config.brand.name;
+
+  return {
+    online: true,
+    name: String(serverName).replace(/\^[0-9]/g, ''),
+    players: playerCount,
+    maxPlayers
+  };
 }
 
 async function updateFiveMStatus() {

@@ -95,3 +95,7 @@ NIKADA ne stavljaj Discord token ili MySQL password u source code/GitHub.
 Koristi Railway Variables.
 
 Ako je MySQL password bio vidljiv na screenshotu ili javno podijeljen, regeneriraj ga prije deploya.
+
+
+## FiveM status fix
+Status endpointi se sada provjeravaju neovisno preko `Promise.allSettled()`. Ako jedan endpoint ne odgovori, drugi dostupni endpoint može potvrditi da je server online.

@@ -233,10 +233,26 @@ async function createTicketChannel(interaction, categoryKey) {
 
   const existing = await getOpenTicketForUser(guild.id, interaction.user.id);
   if (existing) {
-    return interaction.reply({
-      content: `Već imaš otvoren ticket: <#${existing.channel_id}>`,
-      ephemeral: true
-    });
+    // Ako DB kaže da ticket postoji, prvo provjeri postoji li kanal stvarno.
+    // Ovo rješava stare/stale zapise nakon brisanja kanala ili prelaska na novu verziju bota.
+    const existingChannel = await guild.channels.fetch(existing.channel_id).catch(() => null);
+
+    if (existingChannel) {
+      return interaction.reply({
+        content: `Već imaš otvoren ticket: <#${existing.channel_id}>`,
+        ephemeral: true
+      });
+    }
+
+    // Kanal više ne postoji: automatski zatvori stari DB zapis i dopusti novi ticket.
+    const { db } = require('./db');
+    await db().query(
+      `UPDATE discord_tickets
+       SET status='closed', closed_at=COALESCE(closed_at, NOW()), closed_by='SYSTEM_STALE'
+       WHERE id=?`,
+      [existing.id]
+    );
+    console.log(`[TICKET] Closed stale DB ticket #${existing.ticket_number} for ${interaction.user.id}; channel ${existing.channel_id} no longer exists.`);
   }
 
   await interaction.deferReply({ ephemeral: true });
@@ -707,8 +723,8 @@ client.on('interactionCreate', async interaction => {
       return interaction.reply({ content: `Pravila su ažurirana u <#${config.channels.rules}>. ✅`, ephemeral: true });
     }
   } catch (err) {
-    console.error('[INTERACTION]', err);
-    const msg = 'Došlo je do greške. Provjeri bot konzolu/logove.';
+    console.error('[INTERACTION]', err?.stack || err);
+    const msg = `Došlo je do greške pri obradi zahtjeva. Kod: ${err?.code || err?.name || 'UNKNOWN'}. Provjeri Railway log.`;
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp({ content: msg, ephemeral: true }).catch(() => {});
     } else {

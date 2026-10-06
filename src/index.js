@@ -435,6 +435,12 @@ async function createTicketChannel(interaction, categoryKey) {
       { name: 'Korisnik', value: `${interaction.user.tag}\n\`${interaction.user.id}\``, inline: true }
     );
 
+  const claim = new ButtonBuilder()
+    .setCustomId('claim_ticket')
+    .setLabel('Preuzmi ticket')
+    .setEmoji('🙋')
+    .setStyle(ButtonStyle.Primary);
+
   const close = new ButtonBuilder()
     .setCustomId('close_ticket')
     .setLabel('Zatvori ticket')
@@ -444,7 +450,7 @@ async function createTicketChannel(interaction, categoryKey) {
   await channel.send({
     content: `<@${interaction.user.id}>`,
     embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(close)]
+    components: [new ActionRowBuilder().addComponents(claim, close)]
   });
 
   await interaction.editReply(`Ticket je otvoren: ${channel}`);
@@ -481,6 +487,36 @@ async function buildTranscript(channel) {
   }).join('\n');
 }
 
+async function claimTicketChannel(interaction) {
+  const record = await getOpenTicketByChannel(interaction.channel.id);
+  if (!record) {
+    return interaction.reply({ content: 'Ovaj kanal nije aktivan ticket.', ephemeral: true });
+  }
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
+    return interaction.reply({ content: 'Samo staff može preuzeti ticket.', ephemeral: true });
+  }
+
+  const claimed = new ButtonBuilder()
+    .setCustomId('ticket_claimed')
+    .setLabel(`Preuzeo: ${interaction.user.username}`.slice(0, 80))
+    .setEmoji('✅')
+    .setStyle(ButtonStyle.Success)
+    .setDisabled(true);
+
+  const close = new ButtonBuilder()
+    .setCustomId('close_ticket')
+    .setLabel('Zatvori ticket')
+    .setEmoji('🔒')
+    .setStyle(ButtonStyle.Danger);
+
+  await interaction.update({
+    components: [new ActionRowBuilder().addComponents(claimed, close)]
+  });
+
+  await interaction.channel.send(`🙋 Ticket je preuzeo ${interaction.user}.`);
+}
+
 async function closeTicketChannel(interaction) {
   const record = await getOpenTicketByChannel(interaction.channel.id);
   if (!record) {
@@ -495,13 +531,27 @@ async function closeTicketChannel(interaction) {
 
   await interaction.deferReply({ ephemeral: true });
 
+  // Prvo napravi transcript dok kanal i sve poruke još postoje.
   const transcript = await buildTranscript(interaction.channel);
+
+  // Spremi zatvaranje + transcript u MySQL.
   await closeTicket(interaction.channel.id, interaction.user.id, transcript);
 
+  // Pošalji log i .txt transcript u podešeni closed-ticket log kanal.
   const logChannel = await client.channels.fetch(config.channels.closedTicketLog).catch(() => null);
-  if (logChannel?.isTextBased()) {
+
+  if (!logChannel?.isTextBased()) {
+    return interaction.editReply(
+      `Ticket je spremljen u MySQL, ali log kanal <#${config.channels.closedTicketLog}> nije dostupan. Kanal NIJE obrisan radi sigurnosti.`
+    );
+  }
+
+  try {
     const filename = `ticket-${String(record.ticket_number).padStart(4, '0')}.txt`;
-    const attachment = new AttachmentBuilder(Buffer.from(transcript || 'No messages.', 'utf8'), { name: filename });
+    const attachment = new AttachmentBuilder(
+      Buffer.from(transcript || 'Nema poruka u transcriptu.', 'utf8'),
+      { name: filename }
+    );
 
     const logEmbed = baseEmbed()
       .setTitle(`🔒 Zatvoren ticket #${String(record.ticket_number).padStart(4, '0')}`)
@@ -509,101 +559,30 @@ async function closeTicketChannel(interaction) {
         { name: 'Korisnik', value: `<@${record.user_id}> (\`${record.user_id}\`)`, inline: false },
         { name: 'Kategorija', value: record.category_name, inline: true },
         { name: 'Zatvorio', value: `<@${interaction.user.id}>`, inline: true },
-        { name: 'Ticket kanal', value: `${interaction.channel}`, inline: false }
+        { name: 'Kanal', value: `#${interaction.channel.name}`, inline: false }
       );
 
-    await logChannel.send({ embeds: [logEmbed], files: [attachment] });
+    await logChannel.send({
+      embeds: [logEmbed],
+      files: [attachment]
+    });
+  } catch (err) {
+    console.error('[TICKET LOG]', err?.stack || err);
+    return interaction.editReply(
+      'Ticket je spremljen u MySQL, ali slanje loga/transcripta nije uspjelo. Kanal NIJE obrisan radi sigurnosti.'
+    );
   }
 
-  // Kanal ostaje sačuvan. Vlasnik ticketa ga vidi, ali ne može pisati dok ga ne otvori ponovno.
-  await interaction.channel.permissionOverwrites.edit(record.user_id, {
-    ViewChannel: true,
-    SendMessages: false,
-    ReadMessageHistory: true,
-    AttachFiles: false
-  });
+  await interaction.editReply('Ticket je spremljen. Log i transcript su poslani. Kanal se briše...');
 
-  const reopen = new ButtonBuilder()
-    .setCustomId(`reopen_ticket:${record.ticket_number}`)
-    .setLabel('Ponovno otvori ticket')
-    .setEmoji('🔓')
-    .setStyle(ButtonStyle.Success);
-
-  await interaction.channel.send({
-    embeds: [
-      baseEmbed()
-        .setTitle('🔒 Ticket je zatvoren')
-        .setDescription(
-          `<@${record.user_id}>, ovaj ticket je zatvoren i transcript je spremljen.\n\n` +
-          'Ako je problem ponovno aktualan, klikni **Ponovno otvori ticket**. ' +
-          'Otvorit će se **isti kanal/ticket**, a prethodne poruke će ostati sačuvane.'
-        )
-    ],
-    components: [new ActionRowBuilder().addComponents(reopen)]
-  });
-
-  await interaction.editReply('Ticket je zatvoren i spremljen. Može se ponovno otvoriti u istom kanalu. ✅');
-}
-
-async function reopenTicketChannel(interaction) {
-  const [prefix, numberRaw] = interaction.customId.split(':');
-  const ticketNumber = Number(numberRaw);
-  if (!ticketNumber) {
-    return interaction.reply({ content: 'Neispravan ticket.', ephemeral: true });
-  }
-
-  // Dohvati zatvoreni ticket za baš ovaj kanal.
-  const { db } = require('./db');
-  const [rows] = await db().query(
-    `SELECT * FROM discord_tickets
-     WHERE channel_id=? AND ticket_number=? AND status='closed'
-     LIMIT 1`,
-    [interaction.channel.id, ticketNumber]
-  );
-  const record = rows[0];
-
-  if (!record) {
-    return interaction.reply({ content: 'Ovaj ticket nije moguće ponovno otvoriti.', ephemeral: true });
-  }
-
-  const isOwner = interaction.user.id === record.user_id;
-  const canManage = interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels);
-  if (!isOwner && !canManage) {
-    return interaction.reply({ content: 'Samo vlasnik ticketa ili staff može ponovno otvoriti ovaj ticket.', ephemeral: true });
-  }
-
-  await db().query(
-    `UPDATE discord_tickets
-     SET status='open', closed_at=NULL, closed_by=NULL
-     WHERE id=?`,
-    [record.id]
-  );
-
-  await interaction.channel.permissionOverwrites.edit(record.user_id, {
-    ViewChannel: true,
-    SendMessages: true,
-    ReadMessageHistory: true,
-    AttachFiles: true,
-    EmbedLinks: true
-  });
-
-  const close = new ButtonBuilder()
-    .setCustomId('close_ticket')
-    .setLabel('Zatvori ticket')
-    .setEmoji('🔒')
-    .setStyle(ButtonStyle.Danger);
-
-  await interaction.update({
-    embeds: [
-      baseEmbed()
-        .setTitle('🔓 Ticket je ponovno otvoren')
-        .setDescription(
-          `<@${record.user_id}>, ticket **#${String(record.ticket_number).padStart(4, '0')}** je ponovno otvoren.\n` +
-          'Sve prethodne poruke ostale su sačuvane.'
-        )
-    ],
-    components: [new ActionRowBuilder().addComponents(close)]
-  });
+  // Tek nakon uspješnog spremanja u DB i slanja loga briši ticket kanal.
+  setTimeout(async () => {
+    try {
+      await interaction.channel.delete(`Ticket #${record.ticket_number} closed by ${interaction.user.tag}`);
+    } catch (err) {
+      console.error('[TICKET DELETE]', err?.stack || err);
+    }
+  }, 1500);
 }
 
 async function getFiveMStatus() {
@@ -754,12 +733,12 @@ client.on('interactionCreate', async interaction => {
       return createTicketChannel(interaction, interaction.values[0]);
     }
 
-    if (interaction.isButton() && interaction.customId === 'close_ticket') {
-      return closeTicketChannel(interaction);
+    if (interaction.isButton() && interaction.customId === 'claim_ticket') {
+      return claimTicketChannel(interaction);
     }
 
-    if (interaction.isButton() && interaction.customId.startsWith('reopen_ticket:')) {
-      return reopenTicketChannel(interaction);
+    if (interaction.isButton() && interaction.customId === 'close_ticket') {
+      return closeTicketChannel(interaction);
     }
 
     if (interaction.isButton() && interaction.customId === 'get_whitelist') {

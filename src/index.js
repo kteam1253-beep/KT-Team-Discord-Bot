@@ -702,17 +702,18 @@ function notifyModal() {
 client.once('ready', async () => {
   console.log(`[DISCORD] Logged in as ${client.user.tag}`);
 
-  try {
-    await registerCommands();
-    await setupPermanentPanels();
-    await updateFiveMStatus();
-  } catch (err) {
-    console.error('[STARTUP]', err);
-  }
-
+  // Pokreni status neovisno o registraciji naredbi i ostalim panelima.
+  await updateFiveMStatus().catch(err => console.error('[FIVEM STATUS]', err.message));
   setInterval(() => {
     updateFiveMStatus().catch(err => console.error('[FIVEM STATUS]', err.message));
   }, config.fivem.refreshMs);
+
+  try {
+    await registerCommands();
+    await setupPermanentPanels();
+  } catch (err) {
+    console.error('[STARTUP]', err);
+  }
 });
 
 client.on('guildMemberAdd', async member => {

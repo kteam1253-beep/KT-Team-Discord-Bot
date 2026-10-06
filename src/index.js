@@ -586,37 +586,105 @@ async function closeTicketChannel(interaction) {
 }
 
 async function getFiveMStatus() {
-  const base = `http://${config.fivem.host}:${config.fivem.port}`;
+  const host = config.fivem.host;
+  const port = config.fivem.port;
+  const directBase = `http://${host}:${port}`;
+
+  // 1) Primarno: Cfx.re public server list.
+  // Dohvat liste je odvojen od game-server HTTP endpointa, pa radi i kada hosting
+  // blokira /players.json ili /dynamic.json prema Railwayu.
+  try {
+    const response = await axios.get('https://servers-frontend.fivem.net/api/servers/streamRedir/', {
+      timeout: 12000,
+      responseType: 'text',
+      headers: {
+        'User-Agent': 'KT-Team-Discord-Bot/1.7',
+        'Accept': '*/*'
+      }
+    });
+
+    const raw = typeof response.data === 'string'
+      ? response.data
+      : JSON.stringify(response.data);
+
+    // streamRedir je newline-delimited JSON na većini Cfx deployeva.
+    const lines = raw.split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      let item;
+      try {
+        item = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const data = item?.Data || item?.data || item;
+      const endpoints = [
+        ...(Array.isArray(data?.connectEndPoints) ? data.connectEndPoints : []),
+        ...(Array.isArray(data?.connectEndpoints) ? data.connectEndpoints : []),
+        ...(Array.isArray(data?.endpoints) ? data.endpoints : [])
+      ].map(String);
+
+      const matches = endpoints.some(ep =>
+        ep.includes(`${host}:${port}`) ||
+        ep.includes(host)
+      );
+
+      if (!matches) continue;
+
+      const clients = Number(data?.clients ?? data?.Clients ?? 0);
+      const maxClients = Number(data?.svMaxclients ?? data?.sv_maxclients ?? data?.MaxClients ?? 48);
+      const vars = data?.vars || {};
+      const hostname =
+        data?.hostname ||
+        vars?.sv_projectName ||
+        vars?.sv_hostname ||
+        config.brand.name;
+
+      console.log(`[FIVEM] Cfx list: ONLINE ${clients}/${maxClients}`);
+
+      return {
+        online: true,
+        name: String(hostname).replace(/\^[0-9]/g, ''),
+        players: clients,
+        maxPlayers: maxClients
+      };
+    }
+
+    console.log(`[FIVEM] Cfx list: server ${host}:${port} not found; trying direct fallback.`);
+  } catch (err) {
+    console.log(`[FIVEM] Cfx list failed: ${err?.code || err?.message || err}`);
+  }
+
+  // 2) Fallback: standard FiveM endpoints, checked independently.
   const options = {
     timeout: 7000,
-    validateStatus: status => status >= 200 && status < 500
+    validateStatus: status => status >= 200 && status < 500,
+    headers: { 'User-Agent': 'KT-Team-Discord-Bot/1.7' }
   };
 
-  // Endpointi se provjeravaju neovisno. Jedan neuspješan endpoint
-  // više neće cijeli server označiti kao OFFLINE.
   const [dynamicResult, playersResult, infoResult] = await Promise.allSettled([
-    axios.get(`${base}/dynamic.json`, options),
-    axios.get(`${base}/players.json`, options),
-    axios.get(`${base}/info.json`, options)
+    axios.get(`${directBase}/dynamic.json`, options),
+    axios.get(`${directBase}/players.json`, options),
+    axios.get(`${directBase}/info.json`, options)
   ]);
 
-  const dynamic =
-    dynamicResult.status === 'fulfilled' && dynamicResult.value.status === 200
-      ? dynamicResult.value.data
-      : null;
+  const unpack = (result, label) => {
+    if (result.status === 'fulfilled' && result.value.status === 200) {
+      console.log(`[FIVEM] Direct ${label}: HTTP 200`);
+      return result.value.data;
+    }
+    const reason = result.status === 'rejected'
+      ? (result.reason?.code || result.reason?.message || 'request failed')
+      : `HTTP ${result.value?.status}`;
+    console.log(`[FIVEM] Direct ${label}: ${reason}`);
+    return null;
+  };
 
-  const playersData =
-    playersResult.status === 'fulfilled' && playersResult.value.status === 200
-      ? playersResult.value.data
-      : null;
-
-  const info =
-    infoResult.status === 'fulfilled' && infoResult.value.status === 200
-      ? infoResult.value.data
-      : null;
+  const dynamic = unpack(dynamicResult, 'dynamic.json');
+  const playersData = unpack(playersResult, 'players.json');
+  const info = unpack(infoResult, 'info.json');
 
   const online = Boolean(dynamic || info || Array.isArray(playersData));
-
   if (!online) {
     return {
       online: false,
@@ -626,34 +694,31 @@ async function getFiveMStatus() {
     };
   }
 
-  const playerList = Array.isArray(playersData) ? playersData : [];
+  const players = Array.isArray(playersData)
+    ? playersData.length
+    : Number(dynamic?.clients ?? 0);
 
   const maxPlayers =
     Number(dynamic?.sv_maxclients) ||
-    Number(dynamic?.clients) ||
     Number(info?.vars?.sv_maxClients) ||
     Number(info?.vars?.sv_maxclients) ||
     48;
 
-  const playerCount =
-    Array.isArray(playersData)
-      ? playerList.length
-      : Number(dynamic?.clients) || 0;
-
-  const serverName =
+  const hostname =
     dynamic?.hostname ||
     info?.vars?.sv_projectName ||
     info?.vars?.sv_hostname ||
     config.brand.name;
 
+  console.log(`[FIVEM] Direct fallback: ONLINE ${players}/${maxPlayers}`);
+
   return {
     online: true,
-    name: String(serverName).replace(/\^[0-9]/g, ''),
-    players: playerCount,
+    name: String(hostname).replace(/\^[0-9]/g, ''),
+    players,
     maxPlayers
   };
 }
-
 async function updateFiveMStatus() {
   const status = await getFiveMStatus();
   const embed = new EmbedBuilder()
@@ -702,18 +767,17 @@ function notifyModal() {
 client.once('ready', async () => {
   console.log(`[DISCORD] Logged in as ${client.user.tag}`);
 
-  // Pokreni status neovisno o registraciji naredbi i ostalim panelima.
-  await updateFiveMStatus().catch(err => console.error('[FIVEM STATUS]', err.message));
-  setInterval(() => {
-    updateFiveMStatus().catch(err => console.error('[FIVEM STATUS]', err.message));
-  }, config.fivem.refreshMs);
-
   try {
     await registerCommands();
     await setupPermanentPanels();
+    await updateFiveMStatus();
   } catch (err) {
     console.error('[STARTUP]', err);
   }
+
+  setInterval(() => {
+    updateFiveMStatus().catch(err => console.error('[FIVEM STATUS]', err.message));
+  }, config.fivem.refreshMs);
 });
 
 client.on('guildMemberAdd', async member => {

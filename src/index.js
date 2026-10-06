@@ -588,59 +588,41 @@ async function closeTicketChannel(interaction) {
 async function getFiveMStatus() {
   const host = config.fivem.host;
   const port = config.fivem.port;
-  const directBase = `http://${host}:${port}`;
+  const joinCode = process.env.CFX_JOIN_CODE || 'qqqyey6';
 
-  // 1) Primarno: Cfx.re public server list.
-  // Dohvat liste je odvojen od game-server HTTP endpointa, pa radi i kada hosting
-  // blokira /players.json ili /dynamic.json prema Railwayu.
+  // Primarno: Cfx join-code endpoint. Ne ovisi o tome dopušta li game hosting
+  // Railwayu direktan pristup na /players.json.
   try {
-    const response = await axios.get('https://servers-frontend.fivem.net/api/servers/streamRedir/', {
-      timeout: 12000,
-      responseType: 'text',
-      headers: {
-        'User-Agent': 'KT-Team-Discord-Bot/1.7',
-        'Accept': '*/*'
+    const response = await axios.get(
+      `https://servers-frontend.fivem.net/api/servers/single/${encodeURIComponent(joinCode)}`,
+      {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'KT-Team-Discord-Bot/1.8',
+          'Accept': 'application/json'
+        }
       }
-    });
+    );
 
-    const raw = typeof response.data === 'string'
-      ? response.data
-      : JSON.stringify(response.data);
-
-    // streamRedir je newline-delimited JSON na većini Cfx deployeva.
-    const lines = raw.split(/\r?\n/).filter(Boolean);
-    for (const line of lines) {
-      let item;
-      try {
-        item = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      const data = item?.Data || item?.data || item;
-      const endpoints = [
-        ...(Array.isArray(data?.connectEndPoints) ? data.connectEndPoints : []),
-        ...(Array.isArray(data?.connectEndpoints) ? data.connectEndpoints : []),
-        ...(Array.isArray(data?.endpoints) ? data.endpoints : [])
-      ].map(String);
-
-      const matches = endpoints.some(ep =>
-        ep.includes(`${host}:${port}`) ||
-        ep.includes(host)
+    const data = response.data?.Data || response.data?.data || response.data;
+    if (data) {
+      const vars = data.vars || {};
+      const clients = Number(data.clients ?? 0);
+      const maxClients = Number(
+        data.svMaxclients ??
+        data.sv_maxclients ??
+        vars.sv_maxClients ??
+        vars.sv_maxclients ??
+        48
       );
 
-      if (!matches) continue;
-
-      const clients = Number(data?.clients ?? data?.Clients ?? 0);
-      const maxClients = Number(data?.svMaxclients ?? data?.sv_maxclients ?? data?.MaxClients ?? 48);
-      const vars = data?.vars || {};
       const hostname =
-        data?.hostname ||
-        vars?.sv_projectName ||
-        vars?.sv_hostname ||
+        data.hostname ||
+        vars.sv_projectName ||
+        vars.sv_hostname ||
         config.brand.name;
 
-      console.log(`[FIVEM] Cfx list: ONLINE ${clients}/${maxClients}`);
+      console.log(`[FIVEM] Cfx join ${joinCode}: ONLINE ${clients}/${maxClients}`);
 
       return {
         online: true,
@@ -649,23 +631,23 @@ async function getFiveMStatus() {
         maxPlayers: maxClients
       };
     }
-
-    console.log(`[FIVEM] Cfx list: server ${host}:${port} not found; trying direct fallback.`);
   } catch (err) {
-    console.log(`[FIVEM] Cfx list failed: ${err?.code || err?.message || err}`);
+    const status = err?.response?.status;
+    console.log(`[FIVEM] Cfx join ${joinCode} failed: ${status ? `HTTP ${status}` : (err?.code || err?.message || err)}`);
   }
 
-  // 2) Fallback: standard FiveM endpoints, checked independently.
+  // Fallback: direktni standardni FiveM endpointi.
+  const base = `http://${host}:${port}`;
   const options = {
     timeout: 7000,
     validateStatus: status => status >= 200 && status < 500,
-    headers: { 'User-Agent': 'KT-Team-Discord-Bot/1.7' }
+    headers: { 'User-Agent': 'KT-Team-Discord-Bot/1.8' }
   };
 
   const [dynamicResult, playersResult, infoResult] = await Promise.allSettled([
-    axios.get(`${directBase}/dynamic.json`, options),
-    axios.get(`${directBase}/players.json`, options),
-    axios.get(`${directBase}/info.json`, options)
+    axios.get(`${base}/dynamic.json`, options),
+    axios.get(`${base}/players.json`, options),
+    axios.get(`${base}/info.json`, options)
   ]);
 
   const unpack = (result, label) => {
@@ -684,14 +666,8 @@ async function getFiveMStatus() {
   const playersData = unpack(playersResult, 'players.json');
   const info = unpack(infoResult, 'info.json');
 
-  const online = Boolean(dynamic || info || Array.isArray(playersData));
-  if (!online) {
-    return {
-      online: false,
-      name: config.brand.name,
-      players: 0,
-      maxPlayers: 48
-    };
+  if (!(dynamic || info || Array.isArray(playersData))) {
+    return { online: false, name: config.brand.name, players: 0, maxPlayers: 48 };
   }
 
   const players = Array.isArray(playersData)
@@ -764,7 +740,7 @@ function notifyModal() {
 }
 
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`[DISCORD] Logged in as ${client.user.tag}`);
 
   try {

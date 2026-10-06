@@ -120,3 +120,12 @@ Heartbeat:
 - `/health` vraća health check bota
 
 Discord MySQL i FiveM MySQL ostaju potpuno odvojeni. Heartbeat ne koristi FiveM bazu.
+
+
+## v2.1 Status dizajn
+- Novi KT Team Roleplay live-status embed.
+- Uklonjen IP/connect tekst iz embeda.
+- Dodan Discord link button `🎮 Spoji se na server` -> `https://cfx.re/join/qqqyey6`.
+- Dodan ONLINE/OFFLINE status, broj igrača i progress bar.
+- Za logo kao thumbnail postavi Railway variable `KT_LOGO_URL` na direktni javni HTTPS URL PNG slike.
+- Kopija dostavljenog loga nalazi se u `assets/kt-team-logo.png` kao referenca.

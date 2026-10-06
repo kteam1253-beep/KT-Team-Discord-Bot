@@ -684,20 +684,66 @@ function startHeartbeatServer() {
 }
 async function updateFiveMStatus() {
   const status = await getFiveMStatus();
+
+  const current = Math.max(0, Number(status.players) || 0);
+  const maximum = Math.max(1, Number(status.maxPlayers) || 48);
+  const blocks = 10;
+  const filled = status.online
+    ? Math.min(blocks, Math.max(0, Math.round((current / maximum) * blocks)))
+    : 0;
+  const playerBar = `${'█'.repeat(filled)}${'░'.repeat(blocks - filled)}`;
+
   const embed = new EmbedBuilder()
     .setColor(status.online ? 0x20D620 : 0xD62020)
-    .setTitle('🎮 KT Team • FiveM Live Status')
-    .setDescription(status.online ? '🟢 **ONLINE**' : '🔴 **OFFLINE**')
-    .addFields(
-      { name: 'Server', value: status.name.slice(0, 1024), inline: false },
-      { name: 'Igrači', value: status.online ? `**${status.players}/${status.maxPlayers}**` : '**0/-**', inline: true },
-      { name: 'Connect', value: `\`connect ${config.fivem.host}:${config.fivem.port}\``, inline: true },
-      { name: 'Osvježavanje', value: 'Svakih 30 sekundi', inline: true }
+    .setTitle('🎮 KT TEAM ROLEPLAY')
+    .setDescription(
+      `**FiveM • Live Server Status**\n\n` +
+      `${status.online ? '🟢  **SERVER ONLINE**' : '🔴  **SERVER OFFLINE**'}`
     )
-    .setFooter({ text: `KT Team • Zadnje osvježavanje` })
+    .addFields(
+      {
+        name: '👥 IGRAČI',
+        value: status.online ? `**${current} / ${maximum}**` : '**0 / 48**',
+        inline: true
+      },
+      {
+        name: '📡 STATUS',
+        value: status.online ? '**Online**' : '**Offline**',
+        inline: true
+      },
+      {
+        name: '📊 POPUNJENOST',
+        value: `\`${playerBar}\`  **${status.online ? `${current} / ${maximum}` : '0 / 48'}**`,
+        inline: false
+      },
+      {
+        name: '🔄 LIVE STATUS',
+        value: 'Automatsko osvježavanje svakih 30 sekundi',
+        inline: false
+      }
+    )
+    .setFooter({ text: 'KT Team Roleplay • Zadnje osvježavanje' })
     .setTimestamp();
 
-  await upsertPanel('fivem_status', config.channels.liveStatus, { embeds: [embed], components: [] });
+  // Discord thumbnail requires a publicly reachable image URL.
+  // Set KT_LOGO_URL in Railway to the direct HTTPS URL of the KT Team logo.
+  const logoUrl = process.env.KT_LOGO_URL;
+  if (logoUrl && /^https:\/\/.+/i.test(logoUrl)) {
+    embed.setThumbnail(logoUrl);
+  }
+
+  const connectRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel('Spoji se na server')
+      .setEmoji('🎮')
+      .setStyle(ButtonStyle.Link)
+      .setURL('https://cfx.re/join/qqqyey6')
+  );
+
+  await upsertPanel('fivem_status', config.channels.liveStatus, {
+    embeds: [embed],
+    components: [connectRow]
+  });
 }
 
 function notifyModal() {

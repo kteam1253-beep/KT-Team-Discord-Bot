@@ -99,3 +99,24 @@ Ako je MySQL password bio vidljiv na screenshotu ili javno podijeljen, regenerir
 
 ## FiveM status fix
 Status endpointi se sada provjeravaju neovisno preko `Promise.allSettled()`. Ako jedan endpoint ne odgovori, drugi dostupni endpoint može potvrditi da je server online.
+
+
+## v2.0 - FiveM heartbeat status
+
+FiveM status više ne ovisi o Cfx API-ju niti o direktnom `players.json`.
+
+Railway Variables:
+- `FIVEM_STATUS_SECRET` = potpuno isti secret kao `Config.Secret` u `kt-discord-status/config.lua`
+- `FIVEM_HEARTBEAT_TIMEOUT` = `90000` (opcionalno)
+
+Railway mora imati javni domain. U FiveM resourceu postavi:
+
+`Config.BotURL = 'https://TVOJ-RAILWAY-DOMAIN/fivem/heartbeat'`
+
+Heartbeat:
+- `POST /fivem/heartbeat`
+- secret se provjerava preko `X-KT-Status-Secret`
+- nakon 90 sekundi bez heartbeata status postaje OFFLINE
+- `/health` vraća health check bota
+
+Discord MySQL i FiveM MySQL ostaju potpuno odvojeni. Heartbeat ne koristi FiveM bazu.

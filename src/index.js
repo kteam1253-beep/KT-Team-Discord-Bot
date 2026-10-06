@@ -589,28 +589,92 @@ async function getFiveMStatus() {
   const host = config.fivem.host;
   const port = config.fivem.port;
   const joinCode = process.env.CFX_JOIN_CODE || 'qqqyey6';
+  const joinUrl = `https://cfx.re/join/${encodeURIComponent(joinCode)}`;
 
-  // Primarno: Cfx join-code endpoint. Ne ovisi o tome dopušta li game hosting
-  // Railwayu direktan pristup na /players.json.
+  // 1) Resolve Cfx join link. We intentionally do not assume that the join code
+  // is the server-list ID. Railway logs every useful redirect/header detail.
   try {
-    const response = await axios.get(
-      `https://servers-frontend.fivem.net/api/servers/single/${encodeURIComponent(joinCode)}`,
-      {
-        timeout: 10000,
+    const resolved = await axios.get(joinUrl, {
+      timeout: 10000,
+      maxRedirects: 0,
+      validateStatus: status => status >= 200 && status < 500,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 KT-Team-Discord-Bot/1.9',
+        'Accept': '*/*'
+      }
+    });
+
+    const location = resolved.headers?.location || '';
+    console.log(`[FIVEM] Join resolver: HTTP ${resolved.status}${location ? ` -> ${location}` : ''}`);
+
+    // Some Cfx responses expose an endpoint in Location or body.
+    const body = typeof resolved.data === 'string'
+      ? resolved.data
+      : JSON.stringify(resolved.data || {});
+
+    const candidates = [location, body];
+    let resolvedEndpoint = null;
+
+    for (const value of candidates) {
+      if (!value) continue;
+
+      const ipMatch = String(value).match(/(?:https?:\/\/)?((?:\d{1,3}\.){3}\d{1,3}):(\d{2,5})/);
+      if (ipMatch) {
+        resolvedEndpoint = `${ipMatch[1]}:${ipMatch[2]}`;
+        break;
+      }
+
+      const endpointParam = String(value).match(/[?&](?:address|endpoint|connect)=([^&"'<>]+)/i);
+      if (endpointParam) {
+        try {
+          resolvedEndpoint = decodeURIComponent(endpointParam[1]);
+        } catch {
+          resolvedEndpoint = endpointParam[1];
+        }
+        break;
+      }
+    }
+
+    if (resolvedEndpoint) {
+      console.log(`[FIVEM] Join resolver endpoint: ${resolvedEndpoint}`);
+    } else {
+      console.log('[FIVEM] Join resolver: no raw endpoint exposed by Cfx response.');
+    }
+  } catch (err) {
+    console.log(`[FIVEM] Join resolver failed: ${err?.code || err?.message || err}`);
+  }
+
+  // 2) Try known Cfx server detail routes separately. Cfx changes these routes
+  // over time, so each attempt is logged and none can crash the status loop.
+  const cfxDetailUrls = [
+    `https://servers-frontend.fivem.net/api/servers/single/${encodeURIComponent(joinCode)}`,
+    `https://servers-frontend.fivem.net/api/servers/single/${encodeURIComponent(joinCode.toLowerCase())}`
+  ];
+
+  for (const url of [...new Set(cfxDetailUrls)]) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 8000,
+        validateStatus: status => status >= 200 && status < 500,
         headers: {
-          'User-Agent': 'KT-Team-Discord-Bot/1.8',
+          'User-Agent': 'KT-Team-Discord-Bot/1.9',
           'Accept': 'application/json'
         }
-      }
-    );
+      });
 
-    const data = response.data?.Data || response.data?.data || response.data;
-    if (data) {
+      console.log(`[FIVEM] Cfx detail ${url}: HTTP ${response.status}`);
+
+      if (response.status !== 200) continue;
+
+      const data = response.data?.Data || response.data?.data || response.data;
+      if (!data || typeof data !== 'object') continue;
+
       const vars = data.vars || {};
-      const clients = Number(data.clients ?? 0);
+      const clients = Number(data.clients ?? data.Clients ?? 0);
       const maxClients = Number(
         data.svMaxclients ??
         data.sv_maxclients ??
+        data.MaxClients ??
         vars.sv_maxClients ??
         vars.sv_maxclients ??
         48
@@ -622,7 +686,7 @@ async function getFiveMStatus() {
         vars.sv_hostname ||
         config.brand.name;
 
-      console.log(`[FIVEM] Cfx join ${joinCode}: ONLINE ${clients}/${maxClients}`);
+      console.log(`[FIVEM] Cfx detail: ONLINE ${clients}/${maxClients}`);
 
       return {
         online: true,
@@ -630,18 +694,17 @@ async function getFiveMStatus() {
         players: clients,
         maxPlayers: maxClients
       };
+    } catch (err) {
+      console.log(`[FIVEM] Cfx detail request failed: ${err?.code || err?.message || err}`);
     }
-  } catch (err) {
-    const status = err?.response?.status;
-    console.log(`[FIVEM] Cfx join ${joinCode} failed: ${status ? `HTTP ${status}` : (err?.code || err?.message || err)}`);
   }
 
-  // Fallback: direktni standardni FiveM endpointi.
+  // 3) Direct FiveM HTTP fallback.
   const base = `http://${host}:${port}`;
   const options = {
     timeout: 7000,
     validateStatus: status => status >= 200 && status < 500,
-    headers: { 'User-Agent': 'KT-Team-Discord-Bot/1.8' }
+    headers: { 'User-Agent': 'KT-Team-Discord-Bot/1.9' }
   };
 
   const [dynamicResult, playersResult, infoResult] = await Promise.allSettled([
@@ -667,6 +730,7 @@ async function getFiveMStatus() {
   const info = unpack(infoResult, 'info.json');
 
   if (!(dynamic || info || Array.isArray(playersData))) {
+    console.log('[FIVEM] All no-resource status methods failed.');
     return { online: false, name: config.brand.name, players: 0, maxPlayers: 48 };
   }
 

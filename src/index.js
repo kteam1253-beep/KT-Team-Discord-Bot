@@ -231,29 +231,7 @@ async function createTicketChannel(interaction, categoryKey) {
   const category = config.ticketCategories[categoryKey];
   if (!category) return interaction.reply({ content: 'Nepoznata ticket kategorija.', ephemeral: true });
 
-  const existing = await getOpenTicketForUser(guild.id, interaction.user.id);
-  if (existing) {
-    // Ako DB kaže da ticket postoji, prvo provjeri postoji li kanal stvarno.
-    // Ovo rješava stare/stale zapise nakon brisanja kanala ili prelaska na novu verziju bota.
-    const existingChannel = await guild.channels.fetch(existing.channel_id).catch(() => null);
-
-    if (existingChannel) {
-      return interaction.reply({
-        content: `Već imaš otvoren ticket: <#${existing.channel_id}>`,
-        ephemeral: true
-      });
-    }
-
-    // Kanal više ne postoji: automatski zatvori stari DB zapis i dopusti novi ticket.
-    const { db } = require('./db');
-    await db().query(
-      `UPDATE discord_tickets
-       SET status='closed', closed_at=COALESCE(closed_at, NOW()), closed_by='SYSTEM_STALE'
-       WHERE id=?`,
-      [existing.id]
-    );
-    console.log(`[TICKET] Closed stale DB ticket #${existing.ticket_number} for ${interaction.user.id}; channel ${existing.channel_id} no longer exists.`);
-  }
+  // Dozvoljeno je otvoriti više ticketa, čak i istu kategoriju više puta.
 
   await interaction.deferReply({ ephemeral: true });
 
@@ -315,6 +293,14 @@ async function createTicketChannel(interaction, categoryKey) {
   });
 
   await interaction.editReply(`Ticket je otvoren: ${channel}`);
+
+  // Reset dropdowna: ponovno uređujemo ISTU Ticket Center poruku.
+  // Tako se odabrana kategorija odmah vraća na placeholder i može se opet kliknuti.
+  try {
+    await upsertPanel('ticket_panel', config.channels.ticketCenter, ticketPanel());
+  } catch (err) {
+    console.error('[TICKET MENU RESET]', err?.stack || err);
+  }
 }
 
 async function buildTranscript(channel) {
@@ -429,15 +415,6 @@ async function reopenTicketChannel(interaction) {
   const canManage = interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels);
   if (!isOwner && !canManage) {
     return interaction.reply({ content: 'Samo vlasnik ticketa ili staff može ponovno otvoriti ovaj ticket.', ephemeral: true });
-  }
-
-  // Ako korisnik ima neki drugi otvoreni ticket, spriječi duplikat.
-  const existing = await getOpenTicketForUser(interaction.guild.id, record.user_id);
-  if (existing && existing.channel_id !== interaction.channel.id) {
-    return interaction.reply({
-      content: `Već postoji drugi otvoreni ticket: <#${existing.channel_id}>`,
-      ephemeral: true
-    });
   }
 
   await db().query(
